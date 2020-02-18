@@ -444,6 +444,9 @@ type Stack struct {
 	// ndpConfigs is the default NDP configurations used by interfaces.
 	ndpConfigs NDPConfigurations
 
+	// nudConfigs is the default NUD configurations used by interfaces.
+	nudConfigs NUDConfigurations
+
 	// autoGenIPv6LinkLocal determines whether or not the stack will attempt
 	// to auto-generate an IPv6 link-local address for newly enabled non-loopback
 	// NICs. See the AutoGenIPv6LinkLocal field of Options for more details.
@@ -452,6 +455,10 @@ type Stack struct {
 	// ndpDisp is the NDP event dispatcher that is used to send the netstack
 	// integrator NDP related events.
 	ndpDisp NDPDispatcher
+
+	// nudDisp is the NUD event dispatcher that is used to send the netstack
+	// integrator NUD related events.
+	nudDisp NUDDispatcher
 
 	// uniqueIDGenerator is a generator of unique identifiers.
 	uniqueIDGenerator UniqueID
@@ -509,6 +516,9 @@ type Options struct {
 	// before assigning an address to a NIC.
 	NDPConfigs NDPConfigurations
 
+	// NUDConfigs is the default NUD configurations used by interfaces.
+	NUDConfigs NUDConfigurations
+
 	// AutoGenIPv6LinkLocal determines whether or not the stack will attempt to
 	// auto-generate an IPv6 link-local address for newly enabled non-loopback
 	// NICs.
@@ -526,6 +536,10 @@ type Options struct {
 	// NDPDisp is the NDP event dispatcher that an integrator can provide to
 	// receive NDP related events.
 	NDPDisp NDPDispatcher
+
+	// NUDDisp is the NUD event dispatcher that an integrator can provide to
+	// receive NUD related events.
+	NUDDisp NUDDispatcher
 
 	// RawFactory produces raw endpoints. Raw endpoints are enabled only if
 	// this is non-nil.
@@ -661,6 +675,8 @@ func New(opts Options) *Stack {
 	// Make sure opts.NDPConfigs contains valid values only.
 	opts.NDPConfigs.validate()
 
+	opts.NUDConfigs.resetInvalidFields()
+
 	s := &Stack{
 		transportProtocols:   make(map[tcpip.TransportProtocolNumber]*transportProtocolState),
 		networkProtocols:     make(map[tcpip.NetworkProtocolNumber]NetworkProtocol),
@@ -676,9 +692,11 @@ func New(opts Options) *Stack {
 		icmpRateLimiter:      NewICMPRateLimiter(),
 		seed:                 generateRandUint32(),
 		ndpConfigs:           opts.NDPConfigs,
+		nudConfigs:           opts.NUDConfigs,
 		autoGenIPv6LinkLocal: opts.AutoGenIPv6LinkLocal,
 		uniqueIDGenerator:    opts.UniqueID,
 		ndpDisp:              opts.NDPDisp,
+		nudDisp:              opts.NUDDisp,
 		opaqueIIDOpts:        opts.OpaqueIIDOpts,
 		tempIIDSeed:          opts.TempIIDSeed,
 		forwarder:            newForwardQueue(),
@@ -1825,8 +1843,36 @@ func (s *Stack) SetNDPConfigurations(id tcpip.NICID, c NDPConfigurations) *tcpip
 	}
 
 	nic.setNDPConfigs(c)
-
 	return nil
+}
+
+// NUDConfigurations gets the per-interface NUD configurations.
+func (s *Stack) NUDConfigurations(id tcpip.NICID) (NUDConfigurations, *tcpip.Error) {
+	s.mu.RLock()
+	nic, ok := s.nics[id]
+	s.mu.RUnlock()
+
+	if !ok {
+		return NUDConfigurations{}, tcpip.ErrUnknownNICID
+	}
+
+	return nic.NUDConfigs()
+}
+
+// SetNUDConfigurations sets the per-interface NUD configurations.
+//
+// Note, if c contains invalid NUD configuration values, it will be fixed to
+// use default values for the erroneous values.
+func (s *Stack) SetNUDConfigurations(id tcpip.NICID, c NUDConfigurations) *tcpip.Error {
+	s.mu.RLock()
+	nic, ok := s.nics[id]
+	s.mu.RUnlock()
+
+	if !ok {
+		return tcpip.ErrUnknownNICID
+	}
+
+	return nic.setNUDConfigs(c)
 }
 
 // HandleNDPRA provides a NIC with ID id a validated NDP Router Advertisement
