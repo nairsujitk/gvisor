@@ -374,13 +374,16 @@ func (ep *multiPortEndpoint) handlePacketAll(r *Route, id TransportEndpointID, p
 	ep.mu.RUnlock() // Don't use defer for performance reasons.
 }
 
+// flagBitMask contains the flags relevant to the demuxer.
+const flagBitMask = ports.MostRecentFlag | ports.LoadBalancedFlag
+
 // singleRegisterEndpoint tries to add an endpoint to the multiPortEndpoint
 // list. The list might be empty already.
 func (ep *multiPortEndpoint) singleRegisterEndpoint(t TransportEndpoint, flags ports.Flags) *tcpip.Error {
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
 
-	bits := flags.Bits()
+	bits := flags.Bits() & flagBitMask
 
 	if len(ep.endpoints) != 0 {
 		// If it was previously bound, we need to check if we can bind again.
@@ -406,7 +409,7 @@ func (ep *multiPortEndpoint) unregisterEndpoint(t TransportEndpoint, flags ports
 			ep.endpoints[len(ep.endpoints)-1] = nil
 			ep.endpoints = ep.endpoints[:len(ep.endpoints)-1]
 
-			ep.flags.DropRef(flags.Bits())
+			ep.flags.DropRef(flags.Bits() & flagBitMask)
 			break
 		}
 	}

@@ -93,10 +93,6 @@ func (e *endpoint) beforeSave() {
 	if e.waiterQueue != nil && !e.waiterQueue.IsEmpty() {
 		panic("endpoint still has waiters upon save")
 	}
-
-	if e.EndpointState() != StateClose && !((e.EndpointState() == StateBound || e.EndpointState() == StateListen) == e.isPortReserved) {
-		panic("endpoints which are not in the closed state must have a reserved port IFF they are in bound or listen state")
-	}
 }
 
 // saveAcceptedChan is invoked by stateify.
@@ -203,9 +199,13 @@ func (e *endpoint) Resume(s *stack.Stack) {
 		}
 		addr := e.BindAddr
 		port := e.ID.LocalPort
-		if err := e.Bind(tcpip.FullAddress{Addr: addr, Port: port}); err != nil {
-			panic(fmt.Sprintf("endpoint binding [%v]:%d failed: %v", addr, port, err))
+		if ok := e.stack.ReserveTuple(e.effectiveNetProtos, ProtocolNumber, addr, port, e.boundPortFlags, e.boundBindToDevice, tcpip.FullAddress{Addr: e.ID.RemoteAddress, Port: e.ID.RemotePort}); !ok {
+			panic("unable to re-reserve tuple")
 		}
+		e.isPortReserved = true
+
+		// Mark endpoint as bound.
+		e.setEndpointState(StateBound)
 	}
 
 	switch {

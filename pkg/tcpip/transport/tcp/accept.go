@@ -22,12 +22,12 @@ import (
 	"io"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/rand"
 	"gvisor.dev/gvisor/pkg/sleep"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
-	"gvisor.dev/gvisor/pkg/tcpip/ports"
 	"gvisor.dev/gvisor/pkg/tcpip/seqnum"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/waiter"
@@ -199,9 +199,10 @@ func (l *listenContext) isCookieValid(id stack.TransportEndpointID, cookie seqnu
 }
 
 // createConnectingEndpoint creates a new endpoint in a connecting state, with
-// the connection parameters given by the arguments. The endpoint is returned
-// with n.mu held.
-func (l *listenContext) createConnectingEndpoint(s *segment, iss seqnum.Value, irs seqnum.Value, rcvdSynOpts *header.TCPSynOptions, queue *waiter.Queue) (*endpoint, *tcpip.Error) {
+// the connection parameters given by the arguments.
+func (l *listenContext) createConnectingEndpoint(s *segment, iss seqnum.Value, irs seqnum.Value, rcvdSynOpts *header.TCPSynOptions, queue *waiter.Queue) *endpoint {
+	log.Infof("**************createConnectingEndpoint")
+
 	// Create a new endpoint.
 	netProto := l.netProto
 	if netProto == 0 {
@@ -227,22 +228,7 @@ func (l *listenContext) createConnectingEndpoint(s *segment, iss seqnum.Value, i
 	// window to grow to a really large value.
 	n.rcvAutoParams.prevCopied = n.initialReceiveWindow()
 
-	// Lock the endpoint before registering to ensure that no out of
-	// band changes are possible due to incoming packets etc till
-	// the endpoint is done initializing.
-	n.mu.Lock()
-
-	// Register new endpoint so that packets are routed to it.
-	if err := n.stack.RegisterTransportEndpoint(n.boundNICID, n.effectiveNetProtos, ProtocolNumber, n.ID, n, ports.Flags{LoadBalanced: n.reusePort}, n.boundBindToDevice); err != nil {
-		n.mu.Unlock()
-		n.Close()
-		return nil, err
-	}
-
-	n.isRegistered = true
-	n.registeredReusePort = n.reusePort
-
-	return n, nil
+	return n
 }
 
 // createEndpointAndPerformHandshake creates a new endpoint in connected state
@@ -250,32 +236,34 @@ func (l *listenContext) createConnectingEndpoint(s *segment, iss seqnum.Value, i
 //
 // The new endpoint is returned with e.mu held.
 func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *header.TCPSynOptions, queue *waiter.Queue, owner tcpip.PacketOwner) (*endpoint, *tcpip.Error) {
+	log.Infof("*********************createEndpointAndPerformHandshake")
+
 	// Create new endpoint.
 	irs := s.sequenceNumber
 	isn := generateSecureISN(s.id, l.stack.Seed())
-	ep, err := l.createConnectingEndpoint(s, isn, irs, opts, queue)
-	if err != nil {
-		return nil, err
-	}
+	ep := l.createConnectingEndpoint(s, isn, irs, opts, queue)
+
+	// Lock the endpoint before registering to ensure that no out of
+	// band changes are possible due to incoming packets etc till
+	// the endpoint is done initializing.
+	ep.mu.Lock()
 	ep.owner = owner
 
 	// listenEP is nil when listenContext is used by tcp.Forwarder.
 	deferAccept := time.Duration(0)
 	if l.listenEP != nil {
+		log.Infof("*********************createEndpointAndPerformHandshake with listenEP")
+
 		l.listenEP.mu.Lock()
 		if l.listenEP.EndpointState() != StateListen {
+			log.Infof("*********************createEndpointAndPerformHandshake not StateListen")
+
 			l.listenEP.mu.Unlock()
 			// Ensure we release any registrations done by the newly
 			// created endpoint.
 			ep.mu.Unlock()
 			ep.Close()
 
-			// Wake up any waiters. This is strictly not required normally
-			// as a socket that was never accepted can't really have any
-			// registered waiters except when stack.Wait() is called which
-			// waits for all registered endpoints to stop and expects an
-			// EventHUp.
-			ep.waiterQueue.Notify(waiter.EventHUp | waiter.EventErr | waiter.EventIn | waiter.EventOut)
 			return nil, tcpip.ErrConnectionAborted
 		}
 		l.addPendingEndpoint(ep)
@@ -284,21 +272,51 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 		// to the newly created endpoint.
 		l.listenEP.propagateInheritableOptionsLocked(ep)
 
+		if !ep.reserveTupleLocked() {
+			log.Infof("*********************createEndpointAndPerformHandshake not reserveTupleLocked")
+
+			ep.mu.Unlock()
+			ep.Close()
+
+			if l.listenEP != nil {
+				l.removePendingEndpoint(ep)
+				l.listenEP.mu.Unlock()
+			}
+
+			ep.drainClosingSegmentQueue()
+
+			return nil, tcpip.ErrConnectionAborted
+		}
+
 		deferAccept = l.listenEP.deferAccept
 		l.listenEP.mu.Unlock()
 	}
 
+	// Register new endpoint so that packets are routed to it.
+	if err := ep.stack.RegisterTransportEndpoint(ep.boundNICID, ep.effectiveNetProtos, ProtocolNumber, ep.ID, ep, ep.boundPortFlags, ep.boundBindToDevice); err != nil {
+		log.Infof("*********************createEndpointAndPerformHandshake not RegisterTransportEndpoint")
+		ep.mu.Unlock()
+		ep.Close()
+
+		if l.listenEP != nil {
+			l.removePendingEndpoint(ep)
+		}
+
+		ep.drainClosingSegmentQueue()
+
+		return nil, err
+	}
+
+	ep.isRegistered = true
+
 	// Perform the 3-way handshake.
 	h := newPassiveHandshake(ep, seqnum.Size(ep.initialReceiveWindow()), isn, irs, opts, deferAccept)
 	if err := h.execute(); err != nil {
+		log.Infof("*********************createEndpointAndPerformHandshake not h.execute")
+
 		ep.mu.Unlock()
 		ep.Close()
-		// Wake up any waiters. This is strictly not required normally
-		// as a socket that was never accepted can't really have any
-		// registered waiters except when stack.Wait() is called which
-		// waits for all registered endpoints to stop and expects an
-		// EventHUp.
-		ep.waiterQueue.Notify(waiter.EventHUp | waiter.EventErr | waiter.EventIn | waiter.EventOut)
+		ep.notifyAborted()
 
 		if l.listenEP != nil {
 			l.removePendingEndpoint(ep)
@@ -314,6 +332,8 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 	// handshake because it's possible that the peer doesn't support window
 	// scaling.
 	ep.rcv.rcvWndScale = h.effectiveRcvWndScale()
+
+	log.Infof("*********************createEndpointAndPerformHandshake success")
 
 	return ep, nil
 }
@@ -374,6 +394,52 @@ func (e *endpoint) deliverAccepted(n *endpoint) {
 // Precondition: e.mu and n.mu must be held.
 func (e *endpoint) propagateInheritableOptionsLocked(n *endpoint) {
 	n.userTimeout = e.userTimeout
+	n.portFlags = e.portFlags
+	n.boundBindToDevice = e.boundBindToDevice
+	n.boundPortFlags = e.boundPortFlags
+}
+
+// reserveTupleLocked reserves an accepted endpoint's tuple.
+//
+// Preconditions:
+// * propagateInheritableOptionsLocked has been called.
+// * e.mu is held.
+func (e *endpoint) reserveTupleLocked() bool {
+	dest := tcpip.FullAddress{Addr: e.ID.RemoteAddress, Port: e.ID.RemotePort}
+	if !e.stack.ReserveTuple(
+		e.effectiveNetProtos,
+		ProtocolNumber,
+		e.ID.LocalAddress,
+		e.ID.LocalPort,
+		e.boundPortFlags,
+		e.boundBindToDevice,
+		dest,
+	) {
+		return false
+	}
+	log.Infof(
+		"************************reserveTupleLocked: ReserveTuple: %#v, %#v, %#v, %d, %#v, %#v, %#v",
+		e.effectiveNetProtos,
+		ProtocolNumber,
+		e.ID.LocalAddress,
+		e.ID.LocalPort,
+		e.boundPortFlags,
+		e.boundBindToDevice,
+		tcpip.FullAddress{Addr: e.ID.RemoteAddress, Port: e.ID.RemotePort},
+	)
+	e.isPortReserved = true
+	e.boundDest = dest
+	return true
+}
+
+// notifyAborted wakes up any waiters on registered, but not accepted
+// endpoints.
+//
+// This is strictly not required normally as a socket that was never accepted
+// can't really have any registered waiters except when stack.Wait() is called
+// which waits for all registered endpoints to stop and expects an EventHUp.
+func (e *endpoint) notifyAborted() {
+	e.waiterQueue.Notify(waiter.EventHUp | waiter.EventErr | waiter.EventIn | waiter.EventOut)
 }
 
 // handleSynSegment is called in its own goroutine once the listening endpoint
@@ -383,6 +449,8 @@ func (e *endpoint) propagateInheritableOptionsLocked(n *endpoint) {
 // A limited number of these goroutines are allowed before TCP starts using SYN
 // cookies to accept connections.
 func (e *endpoint) handleSynSegment(ctx *listenContext, s *segment, opts *header.TCPSynOptions) {
+	log.Infof("*********************handleSynSegment")
+
 	defer ctx.synRcvdCount.dec()
 	defer func() {
 		e.mu.Lock()
@@ -568,16 +636,34 @@ func (e *endpoint) handleListenSegment(ctx *listenContext, s *segment) {
 			rcvdSynOptions.TSEcr = s.parsedOptions.TSEcr
 		}
 
-		n, err := ctx.createConnectingEndpoint(s, iss, irs, rcvdSynOptions, &waiter.Queue{})
-		if err != nil {
+		n := ctx.createConnectingEndpoint(s, iss, irs, rcvdSynOptions, &waiter.Queue{})
+
+		n.mu.Lock()
+
+		// Propagate any inheritable options from the listening endpoint
+		// to the newly created endpoint.
+		e.propagateInheritableOptionsLocked(n)
+
+		if !n.reserveTupleLocked() {
+			n.mu.Unlock()
+			n.Close()
+
 			e.stack.Stats().TCP.FailedConnectionAttempts.Increment()
 			e.stats.FailedConnectionAttempts.Increment()
 			return
 		}
 
-		// Propagate any inheritable options from the listening endpoint
-		// to the newly created endpoint.
-		e.propagateInheritableOptionsLocked(n)
+		// Register new endpoint so that packets are routed to it.
+		if err := n.stack.RegisterTransportEndpoint(n.boundNICID, n.effectiveNetProtos, ProtocolNumber, n.ID, n, n.boundPortFlags, n.boundBindToDevice); err != nil {
+			n.mu.Unlock()
+			n.Close()
+
+			e.stack.Stats().TCP.FailedConnectionAttempts.Increment()
+			e.stats.FailedConnectionAttempts.Increment()
+			return
+		}
+
+		n.isRegistered = true
 
 		// clear the tsOffset for the newly created
 		// endpoint as the Timestamp was already

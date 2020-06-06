@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/rand"
 	"gvisor.dev/gvisor/pkg/sleep"
 	"gvisor.dev/gvisor/pkg/sync"
@@ -983,6 +984,7 @@ func (e *endpoint) resetConnectionLocked(err *tcpip.Error) {
 // completeWorkerLocked is called by the worker goroutine when it's about to
 // exit.
 func (e *endpoint) completeWorkerLocked() {
+	log.Infof("************************completeWorkerLocked")
 	// Worker is terminating(either due to moving to
 	// CLOSED or ERROR state, ensure we release all
 	// registrations port reservations even if the socket
@@ -1020,6 +1022,7 @@ func (e *endpoint) transitionToStateEstablishedLocked(h *handshake) {
 // delivered to this endpoint from the demuxer when the endpoint
 // is transitioned to StateClose.
 func (e *endpoint) transitionToStateCloseLocked() {
+	log.Infof("*******************transitionToStateCloseLocked")
 	if e.EndpointState() == StateClose {
 		return
 	}
@@ -1579,11 +1582,13 @@ loop:
 
 	// Lock released below.
 	epilogue()
+	log.Infof("***************ran epilogue")
 
 	// A new SYN was received during TIME_WAIT and we need to abort
 	// the timewait and redirect the segment to the listener queue
 	if reuseTW != nil {
 		reuseTW()
+		log.Infof("***************ran reuseTW")
 	}
 
 	return nil
@@ -1617,7 +1622,9 @@ func (e *endpoint) handleTimeWaitSegments() (extendTimeWait bool, reuseTW func()
 					tcpEP := listenEP.(*endpoint)
 					if EndpointState(tcpEP.State()) == StateListen {
 						reuseTW = func() {
+							log.Infof("*************reuseTW: started")
 							if !tcpEP.enqueueSegment(s) {
+								log.Infof("*************reuseTW: decRef")
 								s.decRef()
 								return
 							}
