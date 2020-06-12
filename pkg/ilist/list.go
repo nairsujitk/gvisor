@@ -90,7 +90,7 @@ func (l *List) Back() Element {
 //
 // NOTE: This is an O(n) operation.
 func (l *List) Len() (count int) {
-	for e := l.Front(); e != nil; e = e.Next() {
+	for e := l.Front(); e != nil; e = (ElementMapper{}.linkerFor(e)).Next() {
 		count++
 	}
 	return count

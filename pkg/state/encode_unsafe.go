@@ -62,7 +62,7 @@ func pbSlice(obj reflect.Value) reflect.Value {
 	case reflect.Float64:
 		typ = reflect.TypeOf(float64(0))
 	default:
-		panic("slice element is not of basic value type")
+		Failf("slice element is not of basic value type")
 	}
 	return reflect.NewAt(
 		reflect.ArrayOf(obj.Len(), typ),
@@ -72,7 +72,7 @@ func pbSlice(obj reflect.Value) reflect.Value {
 
 func castSlice(obj reflect.Value, elemTyp reflect.Type) reflect.Value {
 	if obj.Type().Elem().Size() != elemTyp.Size() {
-		panic("cannot cast slice into other element type of different size")
+		Failf("cannot cast slice into other element type of different size")
 	}
 	return reflect.NewAt(
 		reflect.ArrayOf(obj.Len(), elemTyp),

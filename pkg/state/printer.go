@@ -21,52 +21,70 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/golang/protobuf/proto"
-	pb "gvisor.dev/gvisor/pkg/state/object_go_proto"
+	"gvisor.dev/gvisor/pkg/state/wire"
 )
+
+func formatRef(x *wire.Ref, graph uint64, html bool) string {
+	ref := fmt.Sprintf("g%dr%d", graph, x.Root)
+	if len(x.Dots) > 0 {
+		var buf strings.Builder
+		buf.WriteString(ref)
+		for _, component := range x.Dots {
+			switch v := component.(type) {
+			case *wire.FieldName:
+				buf.WriteString(".")
+				buf.WriteString(string(*v))
+			case wire.Index:
+				buf.WriteString(fmt.Sprintf("[%d]", v))
+			default:
+				panic(fmt.Sprintf("unreachable: switch should be exhaustive, unhandled case %v", reflect.TypeOf(component)))
+			}
+		}
+		ref = buf.String()
+	}
+	if html {
+		ref = fmt.Sprintf("<a href=\"#%s\">%s</a>", ref, ref)
+	}
+	return ref
+}
+
+func formatType(tid wire.Uint, graph uint64, html bool) string {
+	ref := fmt.Sprintf("g%dt%d", graph, tid)
+	if html {
+		return fmt.Sprintf("<a href=\"#%s\">%s</a>", ref, ref)
+	}
+	return ref
+}
 
 // format formats a single object, for pretty-printing. It also returns whether
 // the value is a non-zero value.
-func format(graph uint64, depth int, object *pb.Object, html bool) (string, bool) {
-	switch x := object.GetValue().(type) {
-	case *pb.Object_BoolValue:
-		return fmt.Sprintf("%t", x.BoolValue), x.BoolValue != false
-	case *pb.Object_StringValue:
-		return fmt.Sprintf("\"%s\"", string(x.StringValue)), len(x.StringValue) != 0
-	case *pb.Object_Int64Value:
-		return fmt.Sprintf("%d", x.Int64Value), x.Int64Value != 0
-	case *pb.Object_Uint64Value:
-		return fmt.Sprintf("%du", x.Uint64Value), x.Uint64Value != 0
-	case *pb.Object_DoubleValue:
-		return fmt.Sprintf("%f", x.DoubleValue), x.DoubleValue != 0.0
-	case *pb.Object_RefValue:
-		if x.RefValue == 0 {
-			return "nil", false
+func format(graph uint64, depth int, encoded wire.Object, html bool) (string, bool) {
+	switch x := encoded.(type) {
+	case wire.Nil:
+		return "nil", false
+	case *wire.Ref:
+		return formatRef(x, graph, html), true
+	case *wire.Type:
+		tabs := "\n" + strings.Repeat("\t", depth)
+		items := make([]string, 0, len(x.Fields)+2)
+		items = append(items, fmt.Sprintf("type %s {", x.Name))
+		for i := 0; i < len(x.Fields); i++ {
+			items = append(items, fmt.Sprintf("\t%d: %s,", i, string(x.Fields[i])))
 		}
-		ref := fmt.Sprintf("g%dr%d", graph, x.RefValue)
-		if html {
-			ref = fmt.Sprintf("<a href=#%s>%s</a>", ref, ref)
-		}
-		return ref, true
-	case *pb.Object_SliceValue:
-		if x.SliceValue.RefValue == 0 {
-			return "nil", false
-		}
-		ref := fmt.Sprintf("g%dr%d", graph, x.SliceValue.RefValue)
-		if html {
-			ref = fmt.Sprintf("<a href=#%s>%s</a>", ref, ref)
-		}
-		return fmt.Sprintf("%s[:%d:%d]", ref, x.SliceValue.Length, x.SliceValue.Capacity), true
-	case *pb.Object_ArrayValue:
-		if len(x.ArrayValue.Contents) == 0 {
+		items = append(items, "}")
+		return strings.Join(items, tabs), true
+	case *wire.Slice:
+		return fmt.Sprintf("%s{len:%d,cap:%d}", formatRef(&x.Ref, graph, html), x.Length, x.Capacity), true
+	case *wire.Array:
+		if len(x.Contents) == 0 {
 			return "[]", false
 		}
-		items := make([]string, 0, len(x.ArrayValue.Contents)+2)
+		items := make([]string, 0, len(x.Contents)+2)
 		zeros := make([]string, 0) // used to eliminate zero entries.
 		items = append(items, "[")
 		tabs := "\n" + strings.Repeat("\t", depth)
-		for i := 0; i < len(x.ArrayValue.Contents); i++ {
-			item, ok := format(graph, depth+1, x.ArrayValue.Contents[i], html)
+		for i := 0; i < len(x.Contents); i++ {
+			item, ok := format(graph, depth+1, x.Contents[i], html)
 			if ok {
 				if len(zeros) > 0 {
 					items = append(items, zeros...)
@@ -81,81 +99,48 @@ func format(graph uint64, depth int, object *pb.Object, html bool) (string, bool
 			items = append(items, fmt.Sprintf("\t... (%d zeros),", len(zeros)))
 		}
 		items = append(items, "]")
-		return strings.Join(items, tabs), len(zeros) < len(x.ArrayValue.Contents)
-	case *pb.Object_StructValue:
-		if len(x.StructValue.Fields) == 0 {
-			return "struct{}", false
-		}
-		items := make([]string, 0, len(x.StructValue.Fields)+2)
-		items = append(items, "struct{")
+		return strings.Join(items, tabs), len(zeros) < len(x.Contents)
+	case *wire.Struct:
+		items := make([]string, 0, 2)
+		items = append(items, fmt.Sprintf("struct[%s]{", formatType(x.TypeID, graph, html)))
 		tabs := "\n" + strings.Repeat("\t", depth)
 		allZero := true
-		for _, field := range x.StructValue.Fields {
-			element, ok := format(graph, depth+1, field.Value, html)
+		i := 0
+		for field, ok := x.Next(); ok; field, ok = x.Next() {
+			element, ok := format(graph, depth+1, field, html)
 			allZero = allZero && !ok
-			items = append(items, fmt.Sprintf("\t%s: %s,", field.Name, element))
+			items = append(items, fmt.Sprintf("\t%d: %s,", i, element))
+			i++
 		}
 		items = append(items, "}")
 		return strings.Join(items, tabs), !allZero
-	case *pb.Object_MapValue:
-		if len(x.MapValue.Keys) == 0 {
+	case *wire.Map:
+		if len(x.Keys) == 0 {
 			return "map{}", false
 		}
-		items := make([]string, 0, len(x.MapValue.Keys)+2)
+		items := make([]string, 0, len(x.Keys)+2)
 		items = append(items, "map{")
 		tabs := "\n" + strings.Repeat("\t", depth)
-		for i := 0; i < len(x.MapValue.Keys); i++ {
-			key, _ := format(graph, depth+1, x.MapValue.Keys[i], html)
-			value, _ := format(graph, depth+1, x.MapValue.Values[i], html)
+		for i := 0; i < len(x.Keys); i++ {
+			key, _ := format(graph, depth+1, x.Keys[i], html)
+			value, _ := format(graph, depth+1, x.Values[i], html)
 			items = append(items, fmt.Sprintf("\t%s: %s,", key, value))
 		}
 		items = append(items, "}")
 		return strings.Join(items, tabs), true
-	case *pb.Object_InterfaceValue:
-		if x.InterfaceValue.Type == "" {
-			return "interface(nil){}", false
-		}
-		element, _ := format(graph, depth+1, x.InterfaceValue.Value, html)
-		return fmt.Sprintf("interface(\"%s\"){%s}", x.InterfaceValue.Type, element), true
-	case *pb.Object_ByteArrayValue:
-		return printArray(reflect.ValueOf(x.ByteArrayValue))
-	case *pb.Object_Uint16ArrayValue:
-		return printArray(reflect.ValueOf(x.Uint16ArrayValue.Values))
-	case *pb.Object_Uint32ArrayValue:
-		return printArray(reflect.ValueOf(x.Uint32ArrayValue.Values))
-	case *pb.Object_Uint64ArrayValue:
-		return printArray(reflect.ValueOf(x.Uint64ArrayValue.Values))
-	case *pb.Object_UintptrArrayValue:
-		return printArray(castSlice(reflect.ValueOf(x.UintptrArrayValue.Values), reflect.TypeOf(uintptr(0))))
-	case *pb.Object_Int8ArrayValue:
-		return printArray(castSlice(reflect.ValueOf(x.Int8ArrayValue.Values), reflect.TypeOf(int8(0))))
-	case *pb.Object_Int16ArrayValue:
-		return printArray(reflect.ValueOf(x.Int16ArrayValue.Values))
-	case *pb.Object_Int32ArrayValue:
-		return printArray(reflect.ValueOf(x.Int32ArrayValue.Values))
-	case *pb.Object_Int64ArrayValue:
-		return printArray(reflect.ValueOf(x.Int64ArrayValue.Values))
-	case *pb.Object_BoolArrayValue:
-		return printArray(reflect.ValueOf(x.BoolArrayValue.Values))
-	case *pb.Object_Float64ArrayValue:
-		return printArray(reflect.ValueOf(x.Float64ArrayValue.Values))
-	case *pb.Object_Float32ArrayValue:
-		return printArray(reflect.ValueOf(x.Float32ArrayValue.Values))
+	case *wire.Interface:
+		element, _ := format(graph, depth+1, x.Value, html)
+		return fmt.Sprintf("interface[%d]{%s}", x.TypeID, element), true
+	default:
+		// Must be a primitive; use reflection.
+		return fmt.Sprintf("%v", encoded), true
 	}
-
-	// Should not happen, but tolerate.
-	return fmt.Sprintf("(unknown proto type: %T)", object.GetValue()), true
 }
 
 // PrettyPrint reads the state stream from r, and pretty prints to w.
-func PrettyPrint(w io.Writer, r io.Reader, html bool) error {
-	var (
-		// current graph ID.
-		graph uint64
-
-		// current object ID.
-		id uint64
-	)
+func PrettyPrint(w io.Writer, r wire.Reader, html bool) error {
+	// current graph ID.
+	var graph uint64
 
 	if html {
 		fmt.Fprintf(w, "<pre>")
@@ -172,9 +157,7 @@ func PrettyPrint(w io.Writer, r io.Reader, html bool) error {
 			return err
 		}
 		if !object {
-			// Increment the graph number & reset the ID.
-			graph++
-			id = 0
+			graph++ // Increment the graph.
 			if length > 0 {
 				fmt.Fprintf(w, "(%d bytes non-object data)\n", length)
 				io.Copy(ioutil.Discard, &io.LimitedReader{
@@ -186,27 +169,42 @@ func PrettyPrint(w io.Writer, r io.Reader, html bool) error {
 		}
 
 		// Read & unmarshal the object.
-		buf := make([]byte, length)
-		for done := 0; done < len(buf); {
-			n, err := r.Read(buf[done:])
-			done += n
-			if n == 0 && err != nil {
+		//
+		// Note that this loop must match the general structure of the
+		// loop in decode.go. But we don't register type information,
+		// etc. and just print the raw structures.
+		var (
+			oid = objectID(1)
+			tid = typeID(1)
+		)
+		for oid <= objectID(length) {
+			// Unmarshal the object.
+			encoded := wire.Load(r)
+
+			// Is this a type?
+			if _, ok := encoded.(*wire.Type); ok {
+				str, _ := format(graph, 0, encoded, html)
+				tag := fmt.Sprintf("g%dt%d", graph, tid)
+				if html {
+					tag = fmt.Sprintf("<a name=\"%s\">%s</a>", tag, tag)
+				}
+				if _, err := fmt.Fprintf(w, "%s = %s\n", tag, str); err != nil {
+					return err
+				}
+				tid++
+				continue
+			}
+
+			// Format the node.
+			str, _ := format(graph, 0, encoded, html)
+			tag := fmt.Sprintf("g%dr%d", graph, oid)
+			if html {
+				tag = fmt.Sprintf("<a name=\"%s\">%s</a>", tag, tag)
+			}
+			if _, err := fmt.Fprintf(w, "%s = %s\n", tag, str); err != nil {
 				return err
 			}
-		}
-		obj := new(pb.Object)
-		if err := proto.Unmarshal(buf, obj); err != nil {
-			return err
-		}
-
-		id++ // First object must be one.
-		str, _ := format(graph, 0, obj, html)
-		tag := fmt.Sprintf("g%dr%d", graph, id)
-		if html {
-			tag = fmt.Sprintf("<a name=%s>%s</a>", tag, tag)
-		}
-		if _, err := fmt.Fprintf(w, "%s = %s\n", tag, str); err != nil {
-			return err
+			oid++
 		}
 	}
 
