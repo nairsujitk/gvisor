@@ -32,6 +32,7 @@
 package kernel
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -40,7 +41,7 @@ import (
 	"time"
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
-	"gvisor.dev/gvisor/pkg/context"
+	sentrycontext "gvisor.dev/gvisor/pkg/context"
 	"gvisor.dev/gvisor/pkg/cpuid"
 	"gvisor.dev/gvisor/pkg/eventchannel"
 	"gvisor.dev/gvisor/pkg/fspath"
@@ -549,7 +550,7 @@ func (ts *TaskSet) forEachFDPaused(f func(*fs.File, *vfs.FileDescription) error)
 	return err
 }
 
-func (ts *TaskSet) flushWritesToFiles(ctx context.Context) error {
+func (ts *TaskSet) flushWritesToFiles(ctx sentrycontext.Context) error {
 	// TODO(gvisor.dev/issue/1663): Add save support for VFS2.
 	return ts.forEachFDPaused(func(file *fs.File, _ *vfs.FileDescription) error {
 		if flags := file.Flags(); !flags.Write {
@@ -574,7 +575,7 @@ func (ts *TaskSet) flushWritesToFiles(ctx context.Context) error {
 }
 
 // Preconditions: The kernel must be paused.
-func (k *Kernel) invalidateUnsavableMappings(ctx context.Context) error {
+func (k *Kernel) invalidateUnsavableMappings(ctx sentrycontext.Context) error {
 	invalidated := make(map[*mm.MemoryManager]struct{})
 	k.tasks.mu.RLock()
 	defer k.tasks.mu.RUnlock()
@@ -784,8 +785,8 @@ type CreateProcessArgs struct {
 	ContainerID string
 }
 
-// NewContext returns a context.Context that represents the task that will be
-// created by args.NewContext(k).
+// NewContext returns a sentrycontext.Context that represents the task that
+// will be created by args.NewContext(k).
 func (args *CreateProcessArgs) NewContext(k *Kernel) *createProcessContext {
 	return &createProcessContext{
 		Logger: log.Log(),
@@ -794,16 +795,16 @@ func (args *CreateProcessArgs) NewContext(k *Kernel) *createProcessContext {
 	}
 }
 
-// createProcessContext is a context.Context that represents the context
+// createProcessContext is a sentrycontext.Context that represents the context
 // associated with a task that is being created.
 type createProcessContext struct {
-	context.NoopSleeper
+	sentrycontext.NoopSleeper
 	log.Logger
 	k    *Kernel
 	args *CreateProcessArgs
 }
 
-// Value implements context.Context.Value.
+// Value implements sentrycontext.Context.Value.
 func (ctx *createProcessContext) Value(key interface{}) interface{} {
 	switch key {
 	case CtxKernel:
@@ -1465,6 +1466,13 @@ func (k *Kernel) NowMonotonic() int64 {
 	return now
 }
 
+// AfterFunc implements tcpip.Clock.AfterFunc.
+func (*Kernel) AfterFunc(l sync.Locker, d time.Duration, f func()) context.CancelFunc {
+	timer := tcpip.NewCancellableTimer(l, f)
+	timer.Reset(d)
+	return timer.StopLocked
+}
+
 // SetMemoryFile sets Kernel.mf. SetMemoryFile must be called before Init or
 // LoadFrom.
 func (k *Kernel) SetMemoryFile(mf *pgalloc.MemoryFile) {
@@ -1482,7 +1490,7 @@ func (k *Kernel) MemoryFile() *pgalloc.MemoryFile {
 //
 // Callers are responsible for ensuring that the returned Context is not used
 // concurrently with changes to the Kernel.
-func (k *Kernel) SupervisorContext() context.Context {
+func (k *Kernel) SupervisorContext() sentrycontext.Context {
 	return supervisorContext{
 		Logger: log.Log(),
 		k:      k,
@@ -1557,12 +1565,12 @@ func (k *Kernel) ListSockets() []*SocketEntry {
 
 // supervisorContext is a privileged context.
 type supervisorContext struct {
-	context.NoopSleeper
+	sentrycontext.NoopSleeper
 	log.Logger
 	k *Kernel
 }
 
-// Value implements context.Context.
+// Value implements sentrycontext.Context.
 func (ctx supervisorContext) Value(key interface{}) interface{} {
 	switch key {
 	case CtxCanTrace:
@@ -1636,7 +1644,7 @@ const (
 
 // EmitUnimplementedEvent emits an UnimplementedSyscall event via the event
 // channel.
-func (k *Kernel) EmitUnimplementedEvent(ctx context.Context) {
+func (k *Kernel) EmitUnimplementedEvent(ctx sentrycontext.Context) {
 	k.unimplementedSyscallEmitterOnce.Do(func() {
 		k.unimplementedSyscallEmitter = eventchannel.RateLimitedEmitterFrom(eventchannel.DefaultEmitter, unimplementedSyscallsMaxRate, unimplementedSyscallBurst)
 	})

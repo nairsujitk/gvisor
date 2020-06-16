@@ -29,6 +29,7 @@
 package tcpip
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/bits"
@@ -192,7 +193,8 @@ func (e ErrSaveRejection) Error() string {
 	return "save rejected due to unsupported networking state: " + e.Err.Error()
 }
 
-// A Clock provides the current time.
+// A Clock provides the current time and schedules cancellable tasks for
+// execution.
 //
 // Times returned by a Clock should always be used for application-visible
 // time. Only monotonic times should be used for netstack internal timekeeping.
@@ -203,6 +205,13 @@ type Clock interface {
 
 	// NowMonotonic returns a monotonic time value.
 	NowMonotonic() int64
+
+	// AfterFunc schedules f to run in its own goroutine after d has elapsed and
+	// after l has been locked. It returns a function that can be used to cancel
+	// the call.
+	//
+	// l MUST be locked prior to calling the returned cancel function.
+	AfterFunc(l sync.Locker, d time.Duration, f func()) context.CancelFunc
 }
 
 // Address is a byte slice cast as a string that represents the address of a
