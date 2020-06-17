@@ -914,21 +914,76 @@ TEST(FcntlTest, DupAfterO_ASYNC) {
   EXPECT_EQ(after & O_ASYNC, O_ASYNC);
 }
 
-TEST(FcntlTest, GetOwn) {
+TEST(FcntlTest, GetOwnNone) {
   FileDescriptor s = ASSERT_NO_ERRNO_AND_VALUE(
       Socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
 
-  EXPECT_EQ(syscall(__NR_fcntl, s.get(), F_GETOWN), 0);
+  EXPECT_EQ(fcntl(s.get(), F_GETOWN), 0);
   MaybeSave();
 }
 
-TEST(FcntlTest, GetOwnEx) {
+TEST(FcntlTest, GetOwnExNone) {
   FileDescriptor s = ASSERT_NO_ERRNO_AND_VALUE(
       Socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
 
   f_owner_ex owner = {};
-  EXPECT_THAT(syscall(__NR_fcntl, s.get(), F_GETOWN_EX, &owner),
-              SyscallSucceedsWithValue(0));
+  EXPECT_THAT(fcntl(s.get(), F_GETOWN_EX, &owner), SyscallSucceedsWithValue(0));
+}
+
+TEST(FcntlTest, SetOwnInvalidPid) {
+  // TODO(gvisor.dev/1624): Fails on VFS1.
+  SKIP_IF(IsRunningWithVFS1());
+
+  FileDescriptor s = ASSERT_NO_ERRNO_AND_VALUE(
+      Socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
+
+  EXPECT_THAT(fcntl(s.get(), F_SETOWN, 12345678), SyscallFailsWithErrno(ESRCH));
+}
+
+TEST(FcntlTest, SetOwnInvalidPgrp) {
+  // TODO(gvisor.dev/1624): Fails on VFS1.
+  SKIP_IF(IsRunningWithVFS1());
+
+  FileDescriptor s = ASSERT_NO_ERRNO_AND_VALUE(
+      Socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
+
+  EXPECT_THAT(fcntl(s.get(), F_SETOWN, -12345678),
+              SyscallFailsWithErrno(ESRCH));
+}
+
+TEST(FcntlTest, SetOwnPid) {
+  FileDescriptor s = ASSERT_NO_ERRNO_AND_VALUE(
+      Socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
+
+  pid_t pid;
+  EXPECT_THAT(pid = getpid(), SyscallSucceeds());
+
+  ASSERT_THAT(fcntl(s.get(), F_SETOWN, pid), SyscallSucceeds());
+
+  EXPECT_EQ(fcntl(s.get(), F_GETOWN), pid);
+  MaybeSave();
+}
+
+TEST(FcntlTest, SetOwnPgrp) {
+  FileDescriptor s = ASSERT_NO_ERRNO_AND_VALUE(
+      Socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
+
+  pid_t pgid;
+  EXPECT_THAT(pgid = getpgrp(), SyscallSucceeds());
+
+  ASSERT_THAT(fcntl(s.get(), F_SETOWN, -pgid), SyscallSucceeds());
+
+  EXPECT_EQ(fcntl(s.get(), F_GETOWN), -pgid);
+  MaybeSave();
+}
+
+// F_SETOWN flips the sign of negative values, an operation that is guarded
+// against overflow.
+TEST(FcntlTest, SetOwnOverflow) {
+  FileDescriptor s = ASSERT_NO_ERRNO_AND_VALUE(
+      Socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
+
+  EXPECT_THAT(fcntl(s.get(), F_SETOWN, INT_MIN), SyscallFailsWithErrno(EINVAL));
 }
 
 TEST(FcntlTest, SetOwnExInvalidType) {
@@ -937,7 +992,7 @@ TEST(FcntlTest, SetOwnExInvalidType) {
 
   f_owner_ex owner = {};
   owner.type = __pid_type(-1);
-  EXPECT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &owner),
+  EXPECT_THAT(fcntl(s.get(), F_SETOWN_EX, &owner),
               SyscallFailsWithErrno(EINVAL));
 }
 
@@ -949,7 +1004,7 @@ TEST(FcntlTest, SetOwnExInvalidTid) {
   owner.type = F_OWNER_TID;
   owner.pid = -1;
 
-  EXPECT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &owner),
+  EXPECT_THAT(fcntl(s.get(), F_SETOWN_EX, &owner),
               SyscallFailsWithErrno(ESRCH));
 }
 
@@ -961,7 +1016,7 @@ TEST(FcntlTest, SetOwnExInvalidPid) {
   owner.type = F_OWNER_PID;
   owner.pid = -1;
 
-  EXPECT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &owner),
+  EXPECT_THAT(fcntl(s.get(), F_SETOWN_EX, &owner),
               SyscallFailsWithErrno(ESRCH));
 }
 
@@ -973,7 +1028,7 @@ TEST(FcntlTest, SetOwnExInvalidPgrp) {
   owner.type = F_OWNER_PGRP;
   owner.pid = -1;
 
-  EXPECT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &owner),
+  EXPECT_THAT(fcntl(s.get(), F_SETOWN_EX, &owner),
               SyscallFailsWithErrno(ESRCH));
 }
 
@@ -985,10 +1040,9 @@ TEST(FcntlTest, SetOwnExTid) {
   owner.type = F_OWNER_TID;
   EXPECT_THAT(owner.pid = syscall(__NR_gettid), SyscallSucceeds());
 
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &owner),
-              SyscallSucceeds());
+  ASSERT_THAT(fcntl(s.get(), F_SETOWN_EX, &owner), SyscallSucceeds());
 
-  EXPECT_EQ(syscall(__NR_fcntl, s.get(), F_GETOWN), owner.pid);
+  EXPECT_EQ(fcntl(s.get(), F_GETOWN), owner.pid);
   MaybeSave();
 }
 
@@ -1000,10 +1054,9 @@ TEST(FcntlTest, SetOwnExPid) {
   owner.type = F_OWNER_PID;
   EXPECT_THAT(owner.pid = getpid(), SyscallSucceeds());
 
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &owner),
-              SyscallSucceeds());
+  ASSERT_THAT(fcntl(s.get(), F_SETOWN_EX, &owner), SyscallSucceeds());
 
-  EXPECT_EQ(syscall(__NR_fcntl, s.get(), F_GETOWN), owner.pid);
+  EXPECT_EQ(fcntl(s.get(), F_GETOWN), owner.pid);
   MaybeSave();
 }
 
@@ -1015,14 +1068,9 @@ TEST(FcntlTest, SetOwnExPgrp) {
   owner.type = F_OWNER_PGRP;
   EXPECT_THAT(owner.pid = getpgrp(), SyscallSucceeds());
 
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &owner),
-              SyscallSucceeds());
+  ASSERT_THAT(fcntl(s.get(), F_SETOWN_EX, &owner), SyscallSucceeds());
 
-  // NOTE(igudger): I don't understand why, but this is flaky on Linux.
-  // GetOwnExPgrp (below) does not have this issue.
-  SKIP_IF(!IsRunningOnGvisor());
-
-  EXPECT_EQ(syscall(__NR_fcntl, s.get(), F_GETOWN), -owner.pid);
+  EXPECT_EQ(fcntl(s.get(), F_GETOWN), -owner.pid);
   MaybeSave();
 }
 
@@ -1034,11 +1082,10 @@ TEST(FcntlTest, GetOwnExTid) {
   set_owner.type = F_OWNER_TID;
   EXPECT_THAT(set_owner.pid = syscall(__NR_gettid), SyscallSucceeds());
 
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &set_owner),
-              SyscallSucceeds());
+  ASSERT_THAT(fcntl(s.get(), F_SETOWN_EX, &set_owner), SyscallSucceeds());
 
   f_owner_ex got_owner = {};
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_GETOWN_EX, &got_owner),
+  ASSERT_THAT(fcntl(s.get(), F_GETOWN_EX, &got_owner),
               SyscallSucceedsWithValue(0));
   EXPECT_EQ(got_owner.type, set_owner.type);
   EXPECT_EQ(got_owner.pid, set_owner.pid);
@@ -1052,11 +1099,10 @@ TEST(FcntlTest, GetOwnExPid) {
   set_owner.type = F_OWNER_PID;
   EXPECT_THAT(set_owner.pid = getpid(), SyscallSucceeds());
 
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &set_owner),
-              SyscallSucceeds());
+  ASSERT_THAT(fcntl(s.get(), F_SETOWN_EX, &set_owner), SyscallSucceeds());
 
   f_owner_ex got_owner = {};
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_GETOWN_EX, &got_owner),
+  ASSERT_THAT(fcntl(s.get(), F_GETOWN_EX, &got_owner),
               SyscallSucceedsWithValue(0));
   EXPECT_EQ(got_owner.type, set_owner.type);
   EXPECT_EQ(got_owner.pid, set_owner.pid);
@@ -1070,11 +1116,10 @@ TEST(FcntlTest, GetOwnExPgrp) {
   set_owner.type = F_OWNER_PGRP;
   EXPECT_THAT(set_owner.pid = getpgrp(), SyscallSucceeds());
 
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_SETOWN_EX, &set_owner),
-              SyscallSucceeds());
+  ASSERT_THAT(fcntl(s.get(), F_SETOWN_EX, &set_owner), SyscallSucceeds());
 
   f_owner_ex got_owner = {};
-  ASSERT_THAT(syscall(__NR_fcntl, s.get(), F_GETOWN_EX, &got_owner),
+  ASSERT_THAT(fcntl(s.get(), F_GETOWN_EX, &got_owner),
               SyscallSucceedsWithValue(0));
   EXPECT_EQ(got_owner.type, set_owner.type);
   EXPECT_EQ(got_owner.pid, set_owner.pid);
