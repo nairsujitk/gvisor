@@ -199,6 +199,16 @@ func CheckSetStat(ctx context.Context, creds *auth.Credentials, stat *linux.Stat
 	return nil
 }
 
+func CheckSticky(creds *auth.Credentials, mode linux.FileMode, childKUID auth.KUID) error {
+	if mode&linux.ModeSticky == 0 {
+		return nil
+	}
+	if CanActAsOwner(creds, childKUID) {
+		return nil
+	}
+	return syserror.EPERM
+}
+
 // CanActAsOwner returns true if creds can act as the owner of a file with the
 // given owning UID, consistent with Linux's
 // fs/inode.c:inode_owner_or_capable().

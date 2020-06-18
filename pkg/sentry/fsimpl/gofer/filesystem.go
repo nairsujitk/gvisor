@@ -16,6 +16,7 @@ package gofer
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
@@ -447,6 +448,25 @@ func (fs *filesystem) unlinkAt(ctx context.Context, rp *vfs.ResolvingPath, dir b
 	if ok && child == nil {
 		return syserror.ENOENT
 	}
+	if atomic.LoadUint32(&parent.mode)&linux.ModeSticky != 0 {
+		if !ok {
+			// If the sticky bit is set, we need to retrieve the child to determine
+			// whether removing it is allowed.
+			child, err = fs.stepLocked(ctx, rp, parent, false /* mayFollowSymlinks */, &ds)
+			if err != nil {
+				return err
+			}
+		}
+		if !child.cachedMetadataAuthoritative() {
+			if err := child.updateFromGetattr(ctx); err != nil {
+				return err
+			}
+		}
+		if err := parent.mayDelete(rp.Credentials(), child); err != nil {
+			return err
+		}
+	}
+
 	// We only need a dentry representing the file at name if it can be a mount
 	// point. If child is nil, then it can't be a mount point. If child is
 	// non-nil but stale, the actual file can't be a mount point either; we
@@ -1064,7 +1084,8 @@ func (fs *filesystem) RenameAt(ctx context.Context, rp *vfs.ResolvingPath, oldPa
 			return err
 		}
 	}
-	if err := oldParent.checkPermissions(rp.Credentials(), vfs.MayWrite|vfs.MayExec); err != nil {
+	creds := rp.Credentials()
+	if err := oldParent.checkPermissions(creds, vfs.MayWrite|vfs.MayExec); err != nil {
 		return err
 	}
 	vfsObj := rp.VirtualFilesystem()
@@ -1079,12 +1100,20 @@ func (fs *filesystem) RenameAt(ctx context.Context, rp *vfs.ResolvingPath, oldPa
 	if renamed == nil {
 		return syserror.ENOENT
 	}
+	if !renamed.cachedMetadataAuthoritative() {
+		if err := renamed.updateFromGetattr(ctx); err != nil {
+			return err
+		}
+	}
+	if err := oldParent.mayDelete(creds, renamed); err != nil {
+		return err
+	}
 	if renamed.isDir() {
 		if renamed == newParent || genericIsAncestorDentry(renamed, newParent) {
 			return syserror.EINVAL
 		}
 		if oldParent != newParent {
-			if err := renamed.checkPermissions(rp.Credentials(), vfs.MayWrite); err != nil {
+			if err := renamed.checkPermissions(creds, vfs.MayWrite); err != nil {
 				return err
 			}
 		}
@@ -1095,7 +1124,7 @@ func (fs *filesystem) RenameAt(ctx context.Context, rp *vfs.ResolvingPath, oldPa
 	}
 
 	if oldParent != newParent {
-		if err := newParent.checkPermissions(rp.Credentials(), vfs.MayWrite|vfs.MayExec); err != nil {
+		if err := newParent.checkPermissions(creds, vfs.MayWrite|vfs.MayExec); err != nil {
 			return err
 		}
 		newParent.dirMu.Lock()
