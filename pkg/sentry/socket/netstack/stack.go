@@ -143,7 +143,7 @@ func (s *Stack) AddInterfaceAddr(idx int32, addr inet.InterfaceAddr) error {
 
 // TCPReceiveBufferSize implements inet.Stack.TCPReceiveBufferSize.
 func (s *Stack) TCPReceiveBufferSize() (inet.TCPBufferSize, error) {
-	var rs tcpip.StackReceiveBufferSizeOption
+	var rs tcpip.TCPReceiveBufferSizeOption
 	err := s.Stack.TransportProtocolOption(tcp.ProtocolNumber, &rs)
 	return inet.TCPBufferSize{
 		Min:     rs.Min,
@@ -154,7 +154,7 @@ func (s *Stack) TCPReceiveBufferSize() (inet.TCPBufferSize, error) {
 
 // SetTCPReceiveBufferSize implements inet.Stack.SetTCPReceiveBufferSize.
 func (s *Stack) SetTCPReceiveBufferSize(size inet.TCPBufferSize) error {
-	rs := tcpip.StackReceiveBufferSizeOption{
+	rs := tcpip.TCPReceiveBufferSizeOption{
 		Min:     size.Min,
 		Default: size.Default,
 		Max:     size.Max,
@@ -164,7 +164,7 @@ func (s *Stack) SetTCPReceiveBufferSize(size inet.TCPBufferSize) error {
 
 // TCPSendBufferSize implements inet.Stack.TCPSendBufferSize.
 func (s *Stack) TCPSendBufferSize() (inet.TCPBufferSize, error) {
-	var ss tcpip.StackSendBufferSizeOption
+	var ss tcpip.TCPSendBufferSizeOption
 	err := s.Stack.TransportProtocolOption(tcp.ProtocolNumber, &ss)
 	return inet.TCPBufferSize{
 		Min:     ss.Min,
@@ -175,7 +175,7 @@ func (s *Stack) TCPSendBufferSize() (inet.TCPBufferSize, error) {
 
 // SetTCPSendBufferSize implements inet.Stack.SetTCPSendBufferSize.
 func (s *Stack) SetTCPSendBufferSize(size inet.TCPBufferSize) error {
-	ss := tcpip.StackSendBufferSizeOption{
+	ss := tcpip.TCPSendBufferSizeOption{
 		Min:     size.Min,
 		Default: size.Default,
 		Max:     size.Max,

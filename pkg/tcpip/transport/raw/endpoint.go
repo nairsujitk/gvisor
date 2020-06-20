@@ -111,13 +111,13 @@ func newEndpoint(s *stack.Stack, netProto tcpip.NetworkProtocolNumber, transProt
 	}
 
 	// Override with stack defaults.
-	var ss tcpip.StackSendBufferSizeOption
-	if err := s.TransportProtocolOption(transProto, &ss); err == nil {
+	var ss stack.SendBufferSizeOption
+	if err := s.Option(&ss); err == nil {
 		e.sndBufSizeMax = ss.Default
 	}
 
-	var rs tcpip.StackReceiveBufferSizeOption
-	if err := s.TransportProtocolOption(transProto, &rs); err == nil {
+	var rs stack.ReceiveBufferSizeOption
+	if err := s.Option(&rs); err == nil {
 		e.rcvBufSizeMax = rs.Default
 	}
 
@@ -541,7 +541,7 @@ func (e *endpoint) SetSockOptInt(opt tcpip.SockOptInt, v int) *tcpip.Error {
 	case tcpip.SendBufferSizeOption:
 		// Make sure the send buffer size is within the min and max
 		// allowed.
-		var ss tcpip.StackSendBufferSizeOption
+		var ss stack.SendBufferSizeOption
 		if err := e.stack.TransportProtocolOption(e.TransProto, &ss); err != nil {
 			panic(fmt.Sprintf("s.TransportProtocolOption(%d, %+v) = %s", e.TransProto, ss, err))
 		}
@@ -559,7 +559,7 @@ func (e *endpoint) SetSockOptInt(opt tcpip.SockOptInt, v int) *tcpip.Error {
 	case tcpip.ReceiveBufferSizeOption:
 		// Make sure the receive buffer size is within the min and max
 		// allowed.
-		var rs tcpip.StackReceiveBufferSizeOption
+		var rs stack.ReceiveBufferSizeOption
 		if err := e.stack.TransportProtocolOption(e.TransProto, &rs); err != nil {
 			panic(fmt.Sprintf("s.TransportProtocolOption(%d, %+v) = %s", e.TransProto, rs, err))
 		}

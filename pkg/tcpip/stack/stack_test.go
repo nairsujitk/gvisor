@@ -3338,3 +3338,65 @@ func TestDoDADWhenNICEnabled(t *testing.T) {
 		t.Fatalf("got stack.GetMainNICAddress(%d, %d) = (%s, nil), want = (%s, nil)", nicID, header.IPv6ProtocolNumber, got, addr.AddressWithPrefix)
 	}
 }
+
+func TestStackReceiveBufferSizeOption(t *testing.T) {
+	const sMin = stack.MinBufferSize
+	testCases := []struct {
+		name string
+		rs   stack.ReceiveBufferSizeOption
+		err  *tcpip.Error
+	}{
+		// Invalid configurations.
+		{"min_below_zero", stack.ReceiveBufferSizeOption{Min: -1, Default: 5, Max: 10}, tcpip.ErrInvalidOptionValue},
+		{"min_zero", stack.ReceiveBufferSizeOption{Min: 0, Default: 5, Max: 10}, tcpip.ErrInvalidOptionValue},
+		{"default_below_min", stack.ReceiveBufferSizeOption{Min: 0, Default: sMin - 1, Max: sMin - 1}, tcpip.ErrInvalidOptionValue},
+		{"default_above_max", stack.ReceiveBufferSizeOption{Min: 0, Default: sMin + 1, Max: sMin}, tcpip.ErrInvalidOptionValue},
+		{"max_below_min", stack.ReceiveBufferSizeOption{Min: sMin, Default: sMin + 1, Max: sMin - 1}, tcpip.ErrInvalidOptionValue},
+
+		// Valid Configurations
+		{"in_ascending_order", stack.ReceiveBufferSizeOption{Min: sMin, Default: sMin + 1, Max: sMin + 2}, nil},
+		{"all_equal", stack.ReceiveBufferSizeOption{Min: sMin, Default: sMin, Max: sMin}, nil},
+		{"min_default_equal", stack.ReceiveBufferSizeOption{Min: sMin, Default: sMin, Max: sMin + 1}, nil},
+		{"default_max_equal", stack.ReceiveBufferSizeOption{Min: sMin, Default: sMin + 1, Max: sMin + 1}, nil},
+	}
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("%s", tc.name), func(t *testing.T) {
+			s := stack.New(stack.Options{})
+			defer s.Close()
+			if err := s.SetOption(tc.rs); err != tc.err {
+				t.Fatalf("s.SetOption(%+v) = %v, want: %v", tc.rs, err, tc.err)
+			}
+		})
+	}
+}
+
+func TestStackSendBufferSizeOption(t *testing.T) {
+	const sMin = stack.MinBufferSize
+	testCases := []struct {
+		name string
+		ss   stack.SendBufferSizeOption
+		err  *tcpip.Error
+	}{
+		// Invalid configurations.
+		{"min_below_zero", stack.SendBufferSizeOption{Min: -1, Default: 5, Max: 10}, tcpip.ErrInvalidOptionValue},
+		{"min_zero", stack.SendBufferSizeOption{Min: 0, Default: 5, Max: 10}, tcpip.ErrInvalidOptionValue},
+		{"default_below_min", stack.SendBufferSizeOption{Min: 0, Default: sMin - 1, Max: sMin - 1}, tcpip.ErrInvalidOptionValue},
+		{"default_above_max", stack.SendBufferSizeOption{Min: 0, Default: sMin + 1, Max: sMin}, tcpip.ErrInvalidOptionValue},
+		{"max_below_min", stack.SendBufferSizeOption{Min: sMin, Default: sMin + 1, Max: sMin - 1}, tcpip.ErrInvalidOptionValue},
+
+		// Valid Configurations
+		{"in_ascending_order", stack.SendBufferSizeOption{Min: sMin, Default: sMin + 1, Max: sMin + 2}, nil},
+		{"all_equal", stack.SendBufferSizeOption{Min: sMin, Default: sMin, Max: sMin}, nil},
+		{"min_default_equal", stack.SendBufferSizeOption{Min: sMin, Default: sMin, Max: sMin + 1}, nil},
+		{"default_max_equal", stack.SendBufferSizeOption{Min: sMin, Default: sMin + 1, Max: sMin + 1}, nil},
+	}
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("%s", tc.name), func(t *testing.T) {
+			s := stack.New(stack.Options{})
+			defer s.Close()
+			if err := s.SetOption(tc.ss); err != tc.err {
+				t.Fatalf("s.SetOption(%+v) = %v, want: %v", tc.ss, err, tc.err)
+			}
+		})
+	}
+}

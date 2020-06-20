@@ -137,8 +137,8 @@ type protocol struct {
 	mu                         sync.RWMutex
 	sackEnabled                bool
 	delayEnabled               bool
-	sendBufferSize             tcpip.StackSendBufferSizeOption
-	recvBufferSize             tcpip.StackReceiveBufferSizeOption
+	sendBufferSize             tcpip.TCPSendBufferSizeOption
+	recvBufferSize             tcpip.TCPReceiveBufferSizeOption
 	congestionControl          string
 	availableCongestionControl []string
 	moderateReceiveBuffer      bool
@@ -261,7 +261,7 @@ func (p *protocol) SetOption(option interface{}) *tcpip.Error {
 		p.mu.Unlock()
 		return nil
 
-	case tcpip.StackSendBufferSizeOption:
+	case tcpip.TCPSendBufferSizeOption:
 		if v.Min <= 0 || v.Default < v.Min || v.Default > v.Max {
 			return tcpip.ErrInvalidOptionValue
 		}
@@ -270,7 +270,7 @@ func (p *protocol) SetOption(option interface{}) *tcpip.Error {
 		p.mu.Unlock()
 		return nil
 
-	case tcpip.StackReceiveBufferSizeOption:
+	case tcpip.TCPReceiveBufferSizeOption:
 		if v.Min <= 0 || v.Default < v.Min || v.Default > v.Max {
 			return tcpip.ErrInvalidOptionValue
 		}
@@ -375,13 +375,13 @@ func (p *protocol) Option(option interface{}) *tcpip.Error {
 		p.mu.RUnlock()
 		return nil
 
-	case *tcpip.StackSendBufferSizeOption:
+	case *tcpip.TCPSendBufferSizeOption:
 		p.mu.RLock()
 		*v = p.sendBufferSize
 		p.mu.RUnlock()
 		return nil
 
-	case *tcpip.StackReceiveBufferSizeOption:
+	case *tcpip.TCPReceiveBufferSizeOption:
 		p.mu.RLock()
 		*v = p.recvBufferSize
 		p.mu.RUnlock()
@@ -491,12 +491,12 @@ func (*protocol) Parse(pkt *stack.PacketBuffer) bool {
 // NewProtocol returns a TCP transport protocol.
 func NewProtocol() stack.TransportProtocol {
 	return &protocol{
-		sendBufferSize: tcpip.StackSendBufferSizeOption{
+		sendBufferSize: tcpip.TCPSendBufferSizeOption{
 			Min:     MinBufferSize,
 			Default: DefaultSendBufferSize,
 			Max:     MaxBufferSize,
 		},
-		recvBufferSize: tcpip.StackReceiveBufferSizeOption{
+		recvBufferSize: tcpip.TCPReceiveBufferSizeOption{
 			Min:     MinBufferSize,
 			Default: DefaultReceiveBufferSize,
 			Max:     MaxBufferSize,

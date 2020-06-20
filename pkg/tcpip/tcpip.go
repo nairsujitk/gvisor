@@ -821,25 +821,25 @@ type StackSACKEnabled bool
 // enable/disable Nagle's algorithm in TCP.
 type StackDelayEnabled bool
 
-// StackSendBufferSizeOption is used by stack.(Stack*).TransportProtocolOption
-// to get/set the default, min and max send buffer sizes.
-type StackSendBufferSizeOption struct {
+// TCPSendBufferSizeOption is used by stack.(Stack*).TransportProtocolOption
+// to get/set the default, min and max TCP send buffer sizes.
+type TCPSendBufferSizeOption struct {
 	Min     int
 	Default int
 	Max     int
 }
 
-// StackReceiveBufferSizeOption is used by
+// TCPReceiveBufferSizeOption is used by
 // stack.(Stack*).TransportProtocolOption to get/set the default, min and max
-// receive buffer sizes.
-type StackReceiveBufferSizeOption struct {
+// TCP receive buffer sizes.
+type TCPReceiveBufferSizeOption struct {
 	Min     int
 	Default int
 	Max     int
 }
 
 //
-// IPPacketInfo is the message struture for IP_PKTINFO.
+// IPPacketInfo is the message structure for IP_PKTINFO.
 //
 // +stateify savable
 type IPPacketInfo struct {
